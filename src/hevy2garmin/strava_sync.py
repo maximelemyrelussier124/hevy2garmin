@@ -1,7 +1,7 @@
 """Cloud Strava destination. Run with python -m hevy2garmin.strava_sync.
 
 Disabled until OAuth and explicit automatic replacement consent are saved.
-The existing GitHub workflow serializes runs; a DB advisory lock also excludes
+The existing GitHub workflow serializes runs; a durable DB lease also excludes
 manual concurrent runs. Never log API responses containing credentials.
 """
 from __future__ import annotations
@@ -173,6 +173,8 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
             wid = workout["id"]
             state = store.get_app_config(f"strava_upload_{wid}") or {}
             if state.get("activity_id"):
+                if state.get("status") == "categorizing" and not dry_run:
+                    uploader.upload(workout, {})
                 continue
             try:
                 if state.get("upload_id") and state.get("status") != "rejected":
@@ -217,7 +219,8 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                              len(payload["sets"]), len(payload["streams"]["time"]), len(matches))
                     continue
                 if state.get("status") == "rejected":
-                    if not workout_id or not previous_payload or previous_payload == payload:
+                    transport_changed = state.get("transport") != "workout-first-v1"
+                    if not workout_id or not previous_payload or (previous_payload == payload and not transport_changed):
                         raise StravaReviewRequired("Rejected uploads require a manual test with a corrected payload")
                     response = session.get(f"https://www.strava.com/api/v3/uploads/{int(state['upload_id'])}", timeout=30)
                     response.raise_for_status()
@@ -242,6 +245,13 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                 log.warning("Strava deferred for %s: %s", wid, exc)
                 if workout_id:
                     raise
+        if not workout_id and config.get("mirror_garmin"):
+            from hevy2garmin.strava_garmin import mirror_garmin
+            if garmin is None:
+                garmin = get_client(cfg.get("garmin_email"), cfg.get("garmin_password", ""),
+                                    cfg.get("garmin_token_dir", "~/.garminconnect"))
+            reserved_ids = {str(store.get_garmin_id(workout["id"])) for workout in workouts}
+            mirror_garmin(garmin, session, store, config, reserved_ids)
     finally:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM app_cache WHERE key='strava_sync_lock' AND value->>'lease'=%s", (lease,))
