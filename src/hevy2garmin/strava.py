@@ -76,7 +76,7 @@ def build_strength_payload(workout, hr_samples, exercise_types, *, timezone_name
     times = sorted(samples)
     result = {
         "version": "1.0",
-        "start_time": start.isoformat(),
+        "start_time": start.isoformat().replace("+00:00", "Z"),
         "utc_offset": int(start.astimezone(ZoneInfo(timezone_name)).utcoffset().total_seconds()),
         "elapsed_time": elapsed,
         "creator": {"name": "Hevy2Garmin"},
