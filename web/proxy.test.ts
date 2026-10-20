@@ -10,6 +10,18 @@ function req(path: string, headers: Record<string, string> = {}, method = "GET")
 }
 const passedThrough = (res: Response) => res.status === 200 && res.headers.get("x-middleware-next") === "1";
 
+describe("Strava OAuth return", () => {
+  it("lets the callback validate OAuth state without a Strict dashboard cookie", async () => {
+    expect(passedThrough(await proxy(req("/api/strava/callback?code=test&state=test")))).toBe(true);
+  });
+  it("keeps all other Strava operations behind the dashboard login", async () => {
+    for (const path of ["/api/strava/connect", "/api/strava/configure", "/api/strava/enable", "/api/strava/callback/other"]) {
+      expect((await proxy(req(path))).status).toBe(401);
+    }
+    expect((await proxy(req("/api/strava/callback", {}, "POST"))).status).toBe(401);
+  });
+});
+
 beforeEach(() => {
   process.env.H2G_PASSWORD = "test-pw";
   delete process.env.HEVY2GARMIN_SECRET;
