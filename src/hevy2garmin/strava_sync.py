@@ -65,13 +65,20 @@ def matching_activities(session, workout):
     start = parse_time(workout["start_time"]).timestamp()
     duration = (parse_time(workout["end_time"]) - parse_time(workout["start_time"])).total_seconds()
     response = session.get("https://www.strava.com/api/v3/athlete/activities", params={
-        "after": int(start - 180), "before": int(start + 180), "per_page": 200,
+        "after": int(start - 1201), "before": int(start + 1201), "per_page": 200,
     }, timeout=30)
     response.raise_for_status()
-    return [activity for activity in response.json()
-            if activity.get("sport_type") == "WeightTraining"
-            and abs(parse_time(activity["start_date"]).timestamp() - start) <= 120
-            and abs(activity.get("elapsed_time", 0) - duration) <= 300]
+    matches = []
+    for activity in response.json():
+        if activity.get("sport_type") != "WeightTraining":
+            continue
+        other_start = parse_time(activity["start_date"]).timestamp()
+        other_duration = activity.get("elapsed_time", 0)
+        overlap = max(0, min(start + duration, other_start + other_duration) - max(start, other_start))
+        if abs(other_start - start) <= 1200 and max(duration, other_duration) > 0:
+            if overlap / max(duration, other_duration) >= 0.7:
+                matches.append(activity)
+    return matches
 
 
 def prepare_replacement(session, store, workout, existing, *, allowed_id=None, automatic=False):
@@ -177,6 +184,8 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                 matches = matching_activities(session, workout)
                 if len(matches) > 1:
                     raise StravaReviewRequired("Multiple matching activities; select the original manually")
+                if replace_activity is not None and (not matches or int(matches[0]["id"]) != int(replace_activity)):
+                    raise StravaReviewRequired("The explicitly authorized original was not matched; no new activity uploaded")
                 if dry_run:
                     log.info("Validated %d sets and %d real HR samples; %d matching activities",
                              len(payload["sets"]), len(payload["streams"]["time"]), len(matches))
@@ -185,6 +194,11 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                     prepare_replacement(session, store, workout, matches[0],
                         allowed_id=replace_activity, automatic=bool(config.get("replace_garmin_strength")))
                 receipt = uploader.upload(workout, payload)
+                for _ in range(5):
+                    if receipt.get("status") != "processing":
+                        break
+                    time.sleep(2)
+                    receipt = uploader.upload(workout, payload)
                 log.info("Strava %s for Hevy %s", receipt["status"], wid)
             except StravaReviewRequired as exc:
                 log.warning("Strava deferred for %s: %s", wid, exc)
