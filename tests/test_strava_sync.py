@@ -11,6 +11,8 @@ def test_machine_equipment_is_not_misidentified_as_smith_machine():
     assert mappings["7EB3F7C3"] == "MACHINE_CHEST_PRESS"
     assert mappings["9237BAD1"] == "MACHINE_SEATED_SHOULDER_PRESS"
     assert mappings.get("unknown-exercise") is None
+    assert mappings["Rowing Barre T Buste Appuyé"] == "T_BAR_ROW"
+    assert mappings["Développé Épaules Assis (Machine)"] == "MACHINE_SEATED_SHOULDER_PRESS"
 
 
 def test_matching_excludes_other_sports_and_wrong_time_or_duration():
