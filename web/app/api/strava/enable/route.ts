@@ -13,6 +13,9 @@ export async function POST(request: Request) {
   const sql = getDb();
   const rows = await sql`SELECT value FROM app_cache WHERE key = 'strava_sync'`;
   const existing = rows[0]?.value ?? {};
+  if (!existing.single_upload_route_ready) {
+    return new Response("Configure a single upload route before enabling automatic publishing", { status: 409 });
+  }
   const value = { ...existing, enabled: true, replace_garmin_strength: true,
     timezone: "America/Toronto", since: existing.since ?? new Date().toISOString() };
   await sql`INSERT INTO app_cache (key, value) VALUES ('strava_sync', ${sql.json(value)})
