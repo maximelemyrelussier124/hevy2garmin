@@ -49,14 +49,16 @@ def test_replacement_requires_matching_permission_or_garmin_device():
     session.delete.assert_not_called()
 
 
-def test_explicit_original_is_backed_up_before_deletion():
+def test_explicit_original_is_backed_up_without_calling_an_unsupported_delete_api():
     calls = []
     session, store = Mock(), Mock()
     session.get.return_value.json.return_value = {"device_name": "Garmin vivoactive 6"}
     store.set_app_config.side_effect = lambda *args: calls.append("backup")
     session.delete.side_effect = lambda *args, **kwargs: calls.append("delete") or Mock()
-    prepare_replacement(session, store, {"id": "a"}, {"id": 123}, allowed_id=123)
-    assert calls == ["backup", "delete"]
+    with pytest.raises(StravaReviewRequired, match="Original backed up"):
+        prepare_replacement(session, store, {"id": "a"}, {"id": 123}, allowed_id=123)
+    assert calls == ["backup"]
+    session.delete.assert_not_called()
 
 
 def test_failed_backup_preserves_original():
