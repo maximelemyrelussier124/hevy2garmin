@@ -1,9 +1,18 @@
 from unittest.mock import Mock
+import json
+from pathlib import Path
 
 import pytest
 
 from hevy2garmin.strava import StravaReviewRequired
 from hevy2garmin.strava_sync import exercise_mappings, matching_activities, prepare_replacement
+
+
+def test_every_exact_mapping_is_a_supported_strava_identifier():
+    root = Path(__file__).parents[1] / "src/hevy2garmin/data"
+    supported = set(json.loads((root / "strava_exercises.json").read_text())["exercises"])
+    assert set(exercise_mappings({}, {}).values()) <= supported
+    assert "T_BAR_ROW" in supported
 
 
 def test_machine_equipment_is_not_misidentified_as_smith_machine():
