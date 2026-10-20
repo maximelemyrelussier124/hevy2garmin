@@ -98,8 +98,10 @@ def prepare_replacement(session, store, workout, existing, *, allowed_id=None, a
         "replacement_payload": store.get_app_config(f"strava_payload_{workout['id']}"),
         "backed_up_at": datetime.now(timezone.utc).isoformat(),
     })
-    response = session.delete(f"https://www.strava.com/api/v3/activities/{activity_id}", timeout=30)
-    response.raise_for_status()
+    # Strava's public API has no activity deletion endpoint. Preserve this
+    # backup and stop. An explicitly authorized one-time replacement can resume
+    # after the original is deleted through Strava's normal recoverable UI.
+    raise StravaReviewRequired("Original backed up; delete the authorized original in Strava before retrying")
 
 
 def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
@@ -184,8 +186,16 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                 matches = matching_activities(session, workout)
                 if len(matches) > 1:
                     raise StravaReviewRequired("Multiple matching activities; select the original manually")
-                if replace_activity is not None and (not matches or int(matches[0]["id"]) != int(replace_activity)):
-                    raise StravaReviewRequired("The explicitly authorized original was not matched; no new activity uploaded")
+                if replace_activity is not None:
+                    if matches and int(matches[0]["id"]) != int(replace_activity):
+                        raise StravaReviewRequired("The matched activity is not the explicitly authorized original")
+                    if not matches:
+                        backup = store.get_app_config(f"strava_original_{wid}") or {}
+                        if int(backup.get("activity_id", 0)) != int(replace_activity):
+                            raise StravaReviewRequired("No backup of the explicitly authorized original exists")
+                        original = session.get(f"https://www.strava.com/api/v3/activities/{int(replace_activity)}", timeout=30)
+                        if original.status_code != 404:
+                            raise StravaReviewRequired("The authorized original is still present or could not be verified")
                 if dry_run:
                     log.info("Validated %d sets and %d real HR samples; %d matching activities",
                              len(payload["sets"]), len(payload["streams"]["time"]), len(matches))
