@@ -102,10 +102,14 @@ class StravaUploader:
         self.session = session
         self.store = store
 
-    def upload(self, workout, payload):
+    def upload(self, workout, payload, *, data_type="json", file_content=None):
+        if data_type not in {"json", "fit"}:
+            raise ValueError("Unsupported Strava file type")
         key = f"strava_upload_{workout['id']}"
         state = self.store.get_app_config(key) or {}
         if state.get("activity_id"):
+            if state.get("status") == "categorizing":
+                return self.finish_strength(key, state)
             return state
         if state.get("status") in {"submitting", "uncertain"}:
             raise StravaReviewRequired("Upload needs reconciliation before another POST")
@@ -114,18 +118,24 @@ class StravaUploader:
             # upload on the next scheduled run. external_id is not an idempotency key.
             self.store.set_app_config(key, {"status": "submitting"})
             try:
+                data = {"data_type": data_type, "name": workout.get("title", "Workout"),
+                        "external_id": f"hevy-{workout['id']}.{data_type}"}
+                if data_type == "json":
+                    data["sport_type"] = "Workout"
+                content = json.dumps(payload, allow_nan=False) if data_type == "json" else file_content
+                if data_type == "fit" and not isinstance(content, bytes):
+                    raise ValueError("Original FIT bytes are required")
                 response = self.session.post(
                     "https://www.strava.com/api/v3/uploads",
-                    data={"data_type": "json", "sport_type": "WeightTraining",
-                          "name": workout.get("title", "Weight Training"),
-                          "external_id": f"hevy-{workout['id']}.json"},
-                    files={"file": (f"hevy-{workout['id']}.json",
-                                     json.dumps(payload, allow_nan=False), "application/json")},
+                    data=data,
+                    files={"file": (f"hevy-{workout['id']}.{data_type}", content,
+                        "application/json" if data_type == "json" else "application/octet-stream")},
                     timeout=60,
                 )
                 response.raise_for_status()
                 receipt = response.json()
-                state = {"status": "processing", "upload_id": receipt["id"]}
+                state = {"status": "processing", "upload_id": receipt["id"], "data_type": data_type,
+                         "transport": "workout-first-v1"}
             except Exception:
                 self.store.set_app_config(key, {"status": "uncertain"})
                 raise
@@ -141,5 +151,19 @@ class StravaUploader:
             raise StravaReviewRequired(f"Strava rejected the upload: {error}")
         if receipt.get("activity_id"):
             state = {**state, "status": "complete", "activity_id": receipt["activity_id"]}
+            if state.get("data_type", "json") == "json":
+                state["status"] = "categorizing"
             self.store.set_app_config(key, state)
+            if state["status"] == "categorizing":
+                return self.finish_strength(key, state)
+        return state
+
+    def finish_strength(self, key, state):
+        response = self.session.put(
+            f"https://www.strava.com/api/v3/activities/{int(state['activity_id'])}",
+            data={"sport_type": "WeightTraining"}, timeout=30,
+        )
+        response.raise_for_status()
+        state = {**state, "status": "complete"}
+        self.store.set_app_config(key, state)
         return state
