@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from hevy2garmin.strava import StravaReviewRequired
-from hevy2garmin.strava_sync import exercise_mappings, matching_activities, prepare_replacement
+from hevy2garmin.strava_sync import exercise_mappings, matching_activities, prepare_replacement, watch_window
 
 
 def test_every_exact_mapping_is_a_supported_strava_identifier():
@@ -13,6 +13,14 @@ def test_every_exact_mapping_is_a_supported_strava_identifier():
     supported = set(json.loads((root / "strava_exercises.json").read_text())["exercises"])
     assert set(exercise_mappings({}, {}).values()) <= supported
     assert "T_BAR_ROW" in supported
+
+
+def test_export_uses_the_actual_watch_window_instead_of_an_earlier_hevy_start():
+    workout = {"id": "a", "start_time": "2026-10-20T13:33:58Z", "exercises": [{"title": "Chest Press"}]}
+    result = watch_window(workout, {"summaryDTO": {"startTimeGMT": "2026-10-20T13:36:03.0", "elapsedDuration": 2054}})
+    assert result["start_time"] == "2026-10-20T13:36:03+00:00"
+    assert result["end_time"] == "2026-10-20T14:10:17+00:00"
+    assert result["exercises"] == workout["exercises"]
 
 
 def test_machine_equipment_is_not_misidentified_as_smith_machine():
