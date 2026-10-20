@@ -165,9 +165,12 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                     garmin = get_client(cfg.get("garmin_email"), cfg.get("garmin_password", ""),
                                         cfg.get("garmin_token_dir", "~/.garminconnect"))
                 samples = hr_for_sync(store, garmin, workout, cfg, source_activity_id=source_id)
+                activity_details = garmin.get_activity(int(source_id))
+                summary = activity_details.get("summaryDTO") or activity_details
                 payload = build_strength_payload(workout, samples,
                     exercise_mappings(workout, config.get("exercise_types", {})),
                     timezone_name=config.get("timezone", "America/Toronto"),
+                    calories=summary.get("calories"),
                     supported_exercises=supported)
                 # Retain the exact, validated payload before modifying any original.
                 store.set_app_config(f"strava_payload_{wid}", payload)
