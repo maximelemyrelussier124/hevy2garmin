@@ -194,6 +194,14 @@ export async function proxy(req: NextRequest, event?: NextFetchEvent) {
   countVisit(req, event);
   const { pathname } = req.nextUrl;
   if (STATIC_PREFIX.test(pathname)) return NextResponse.next();
+  // The dashboard session is SameSite=Strict, so a top-level return from
+  // strava.com intentionally carries no session cookie. This one GET is
+  // authenticated by the callback route's short-lived HttpOnly OAuth state
+  // cookie (SameSite=Lax) and constant-time state comparison instead. Keep
+  // configure/connect/enable behind the normal dashboard session gate.
+  if (pathname === "/api/strava/callback" && req.method === "GET" && authEnabled()) {
+    return NextResponse.next();
+  }
   // Before the auth gate on purpose: a demo with auth disabled is still read-only.
   if (
     demoMode() &&
