@@ -28,12 +28,6 @@ export default async function StravaPage({ searchParams }: {
       <button className="rounded border px-4 py-2" type="submit">Save and connect Strava</button>
     </form>
     {credentials?.client_id && <a className="underline" href="/api/strava/connect">Authorize Strava</a>}
-    {connected && !enabled && <form action="/api/strava/enable" method="post" className="space-y-4">
-      <label className="block"><input type="checkbox" name="replace_garmin_strength" value="yes" required />
-        Automatically replace matching Garmin Weight Training activities in Strava with the combined workout.
-      </label>
-      <p>The program saves the original details and heart-rate stream before replacement. Runs and other sport types are left in place. Automatic publishing starts with future workouts.</p>
-      <button className="rounded border px-4 py-2" type="submit">Enable automatic strength sync</button>
-    </form>}
+    {connected && !enabled && <p>Automatic publishing requires a single upload route. The Strava API cannot replace existing activities. Matching activities are held for review instead of creating duplicates.</p>}
   </main>;
 }
