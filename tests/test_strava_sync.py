@@ -33,6 +33,14 @@ def test_matching_excludes_other_sports_and_wrong_time_or_duration():
     assert result == [base]
 
 
+def test_matching_accounts_for_watch_starting_before_hevy():
+    session = Mock()
+    native = {"id": 123, "sport_type": "WeightTraining", "start_date": "2026-10-20T13:36:00Z", "elapsed_time": 2054}
+    session.get.return_value.json.return_value = [native]
+    result = matching_activities(session, {"start_time": "2026-10-20T13:40:00Z", "end_time": "2026-10-20T14:10:14Z"})
+    assert result == [native]
+
+
 def test_replacement_requires_matching_permission_or_garmin_device():
     session, store = Mock(), Mock()
     session.get.return_value.json.return_value = {"device_name": "Hevy"}
