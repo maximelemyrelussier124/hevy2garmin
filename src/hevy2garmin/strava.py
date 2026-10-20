@@ -107,7 +107,7 @@ class StravaUploader:
         state = self.store.get_app_config(key) or {}
         if state.get("activity_id"):
             return state
-        if state.get("status") in {"submitting", "uncertain", "rejected"}:
+        if state.get("status") in {"submitting", "uncertain"}:
             raise StravaReviewRequired("Upload needs reconciliation before another POST")
         if not state.get("upload_id"):
             # Write intent before sending: a crash/timeout must not create another
@@ -136,8 +136,9 @@ class StravaUploader:
         response.raise_for_status()
         receipt = response.json()
         if receipt.get("error"):
-            self.store.set_app_config(key, {**state, "status": "rejected"})
-            raise StravaReviewRequired("Strava rejected the upload; inspect its receipt")
+            error = str(receipt["error"])[:500]
+            self.store.set_app_config(key, {**state, "status": "rejected", "error": error})
+            raise StravaReviewRequired(f"Strava rejected the upload: {error}")
         if receipt.get("activity_id"):
             state = {**state, "status": "complete", "activity_id": receipt["activity_id"]}
             self.store.set_app_config(key, state)
