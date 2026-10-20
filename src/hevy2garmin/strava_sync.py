@@ -11,7 +11,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -59,6 +59,21 @@ def parse_time(value):
     if result.utcoffset() is None:
         raise ValueError("Timezone required")
     return result
+
+
+def watch_window(workout, details):
+    """Use the device recording's real time window, retaining Hevy's sets."""
+    summary = details.get("summaryDTO") or details
+    raw = summary.get("startTimeGMT") or details.get("startTimeGMT")
+    duration = summary.get("elapsedDuration") or summary.get("duration")
+    if not raw or not duration:
+        raise StravaReviewRequired("Garmin recording is missing its real start time or duration")
+    start = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    if start.utcoffset() is None:
+        start = start.replace(tzinfo=timezone.utc)  # Garmin explicitly labels this GMT.
+    end = start + timedelta(seconds=float(duration))
+    return {**workout, "start_time": start.astimezone(timezone.utc).isoformat(),
+            "end_time": end.astimezone(timezone.utc).isoformat()}
 
 
 def matching_activities(session, workout):
@@ -160,10 +175,10 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
             if state.get("activity_id"):
                 continue
             try:
-                if state.get("upload_id"):
+                if state.get("upload_id") and state.get("status") != "rejected":
                     uploader.upload(workout, {})  # Resume processing without another POST.
                     continue
-                if state.get("status") in {"submitting", "uncertain", "rejected"}:
+                if state.get("status") in {"submitting", "uncertain"}:
                     raise StravaReviewRequired("Previous upload requires reconciliation")
                 # Wait for the watch and Garmin sync before producing the sole Strava activity.
                 source_id = store.get_garmin_id(wid)
@@ -173,17 +188,18 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                 if garmin is None:
                     garmin = get_client(cfg.get("garmin_email"), cfg.get("garmin_password", ""),
                                         cfg.get("garmin_token_dir", "~/.garminconnect"))
-                samples = hr_for_sync(store, garmin, workout, cfg, source_activity_id=source_id)
                 activity_details = garmin.get_activity(int(source_id))
                 summary = activity_details.get("summaryDTO") or activity_details
-                payload = build_strength_payload(workout, samples,
+                recording = watch_window(workout, activity_details)
+                samples = hr_for_sync(store, garmin, recording, cfg, source_activity_id=source_id)
+                payload = build_strength_payload(recording, samples,
                     exercise_mappings(workout, config.get("exercise_types", {})),
                     timezone_name=config.get("timezone", "America/Toronto"),
                     calories=summary.get("calories"),
                     supported_exercises=supported)
                 # Retain the exact, validated payload before modifying any original.
-                store.set_app_config(f"strava_payload_{wid}", payload)
-                matches = matching_activities(session, workout)
+                previous_payload = store.get_app_config(f"strava_payload_{wid}")
+                matches = matching_activities(session, recording)
                 if len(matches) > 1:
                     raise StravaReviewRequired("Multiple matching activities; select the original manually")
                 if replace_activity is not None:
@@ -200,6 +216,18 @@ def sync_destination(*, workout_id=None, replace_activity=None, dry_run=False):
                     log.info("Validated %d sets and %d real HR samples; %d matching activities",
                              len(payload["sets"]), len(payload["streams"]["time"]), len(matches))
                     continue
+                if state.get("status") == "rejected":
+                    if not workout_id or not previous_payload or previous_payload == payload:
+                        raise StravaReviewRequired("Rejected uploads require a manual test with a corrected payload")
+                    response = session.get(f"https://www.strava.com/api/v3/uploads/{int(state['upload_id'])}", timeout=30)
+                    response.raise_for_status()
+                    rejected = response.json()
+                    if not rejected.get("error") or rejected.get("activity_id"):
+                        raise StravaReviewRequired("Previous rejection could not be confirmed; no retry")
+                    store.set_app_config(f"strava_rejected_{wid}_{state['upload_id']}", {
+                        "receipt": rejected, "payload": previous_payload})
+                    store.set_app_config(f"strava_upload_{wid}", {"status": "retry_ready"})
+                store.set_app_config(f"strava_payload_{wid}", payload)
                 if matches:
                     prepare_replacement(session, store, workout, matches[0],
                         allowed_id=replace_activity, automatic=bool(config.get("replace_garmin_strength")))
