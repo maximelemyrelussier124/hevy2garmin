@@ -802,9 +802,18 @@ def sync(
         pending = pending_by_id.get(wid)
         if pending:
             phase = pending.get("phase")
-            bucket = _pending_status(pending)
-            logger.debug("Skipping %s (%s) — pending upload is %s", wid, title, phase)
-            stats[bucket] += 1
+            if phase in {"processing", "finalizing"}:
+                try:
+                    logger.info("Checking pending Garmin upload for %s (%s)", wid, title)
+                    result = reconcile_pending(store, garmin_client, wid)
+                    stats[result.status] += 1
+                except Exception as exc:  # noqa: BLE001  # keep syncing other workouts
+                    logger.error("Failed to check pending upload %s: %s", wid, exc)
+                    stats["processing"] += 1
+            else:
+                bucket = _pending_status(pending)
+                logger.debug("Skipping %s (%s) — pending upload is %s", wid, title, phase)
+                stats[bucket] += 1
             continue
 
         for ex in workout.get("exercises", []):
