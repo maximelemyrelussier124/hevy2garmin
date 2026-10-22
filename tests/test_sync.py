@@ -199,8 +199,9 @@ class TestSync:
         with (
             patch("hevy2garmin.sync.HevyClient") as MockHevy,
             patch("hevy2garmin.sync.db") as mock_db,
-            patch("hevy2garmin.sync.get_client"),
+            patch("hevy2garmin.sync.get_client") as mock_client,
             patch("hevy2garmin.sync.sync_one_workout") as mock_one,
+            patch("hevy2garmin.sync.reconcile_pending") as mock_reconcile,
             patch("hevy2garmin.reconcile.detect_duplicates", return_value=[]),
         ):
             mock_hevy = MockHevy.return_value
@@ -208,6 +209,8 @@ class TestSync:
             mock_hevy.get_workouts.return_value = {"workouts": [sample_workout], "page_count": 1}
             mock_db.is_synced.return_value = False
             mock_db.list_pending.return_value = [{"hevy_id": sample_workout["id"], "phase": phase}]
+
+            mock_reconcile.return_value.status = "processing"
 
             result = sync(
                 config={"hevy_api_key": "test", "merge_mode": False},
@@ -217,6 +220,12 @@ class TestSync:
             )
 
             mock_one.assert_not_called()
+            if phase == "processing":
+                mock_reconcile.assert_called_once_with(
+                    mock_db, mock_client.return_value, sample_workout["id"]
+                )
+            else:
+                mock_reconcile.assert_not_called()
             assert result[bucket] == 1
             assert result["synced"] == 0
 
@@ -245,6 +254,41 @@ class TestSync:
 
             mock_one.assert_not_called()
             assert result["skipped"] == 1
+            assert result["processing"] == 0
+
+    def test_scheduled_sync_finishes_pending_upload_without_reupload(
+        self, sample_workout: dict
+    ) -> None:
+        with (
+            patch("hevy2garmin.sync.HevyClient") as MockHevy,
+            patch("hevy2garmin.sync.db") as mock_db,
+            patch("hevy2garmin.sync.get_client") as mock_client,
+            patch("hevy2garmin.sync.reconcile_pending") as reconcile,
+            patch("hevy2garmin.sync.sync_one_workout") as upload,
+            patch("hevy2garmin.reconcile.detect_duplicates", return_value=[]),
+        ):
+            MockHevy.return_value.get_workout_count.return_value = 1
+            MockHevy.return_value.get_workouts.return_value = {
+                "workouts": [sample_workout], "page_count": 1
+            }
+            mock_db.is_synced.return_value = False
+            mock_db.list_pending.return_value = [
+                {"hevy_id": sample_workout["id"], "phase": "finalizing"}
+            ]
+            reconcile.return_value.status = "synced"
+
+            result = sync(
+                config={"hevy_api_key": "test", "merge_mode": False},
+                limit=1,
+                respect_grace=False,
+                record_log=False,
+            )
+
+            reconcile.assert_called_once_with(
+                mock_db, mock_client.return_value, sample_workout["id"]
+            )
+            upload.assert_not_called()
+            assert result["synced"] == 1
             assert result["processing"] == 0
 
     def test_reports_unmapped_exercises(self, sample_workout_unmapped: dict) -> None:
