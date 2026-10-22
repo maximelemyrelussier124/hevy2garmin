@@ -5,6 +5,10 @@ on:
     - cron: '17 */2 * * *'
   workflow_dispatch:
     inputs:
+      diagnose_garmin_sets:
+        description: 'Count exercise sets on the latest synced Garmin activity (read-only)'
+        type: boolean
+        default: false
       strava_workout_id:
         description: 'Optional Hevy workout ID for a single Strava test'
         required: false
@@ -39,10 +43,35 @@ jobs:
       - name: Install
         run: pip install ".[cloud]"
       - name: Sync workouts from installation date only
+        if: ${{ inputs.diagnose_garmin_sets != true }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: hevy2garmin sync --since 2026-10-20
+      - name: Count Garmin exercise sets (read-only)
+        if: ${{ inputs.diagnose_garmin_sets == true }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          from hevy2garmin.config import load_config
+          from hevy2garmin.db import get_db
+          from hevy2garmin.garmin import get_client, get_activity_exercise_sets
+
+          with get_db()._get_conn() as conn, conn.cursor() as cur:
+              cur.execute("SELECT garmin_activity_id FROM synced_workouts WHERE status='success' ORDER BY synced_at DESC LIMIT 1")
+              row = cur.fetchone()
+          if not row:
+              raise SystemExit("No synced activity")
+          config = load_config()
+          client = get_client(config.get("garmin_email"), config.get("garmin_password"), config.get("garmin_token_dir", "~/.garminconnect"))
+          sets = get_activity_exercise_sets(client, int(row["garmin_activity_id"])).get("exerciseSets") or []
+          active = [s for s in sets if s.get("setType") == "ACTIVE"]
+          named = [s for s in active if (s.get("exercises") or [])]
+          reps = [s for s in active if s.get("repetitionCount") or s.get("repetitions")]
+          print(f"Garmin returned {len(sets)} total sets, {len(active)} active sets, {len(named)} named sets, {len(reps)} sets with reps")
+          PY
       - name: Publish structured strength and heart rate to Strava when authorized
+        if: ${{ inputs.diagnose_garmin_sets != true }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           STRAVA_TEST_WORKOUT: ${{ inputs.strava_workout_id }}
