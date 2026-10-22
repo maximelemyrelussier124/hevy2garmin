@@ -66,6 +66,8 @@ jobs:
           config = load_config()
           client = get_client(config.get("garmin_email"), config.get("garmin_password"), config.get("garmin_token_dir", "~/.garminconnect"))
           sets = get_activity_exercise_sets(client, int(row["garmin_activity_id"])).get("exerciseSets") or []
+          activity = client.get_activity(int(row["garmin_activity_id"]))
+          activity_type = (activity.get("activityType") or {}).get("typeKey")
           active = [s for s in sets if s.get("setType") == "ACTIVE"]
           named = [s for s in active if any(e.get("name") for e in (s.get("exercises") or []))]
           reps = [s for s in active if s.get("repetitionCount") or s.get("repetitions")]
@@ -74,7 +76,7 @@ jobs:
               raise SystemExit("Hevy workout unavailable")
           exercises = workout.get("exercises") or []
           expected = sum(len(e.get("sets") or []) for e in exercises)
-          print(f"Hevy: {len(exercises)} exercises, {expected} sets. Garmin: {len(sets)} total, {len(active)} active, {len(named)} with recognized names, {len(reps)} with reps")
+          print(f"Hevy: {len(exercises)} exercises, {expected} sets. Garmin activity type: {activity_type}. Garmin: {len(sets)} total, {len(active)} active, {len(named)} with recognized names, {len(reps)} with reps")
           PY
       - name: Publish structured strength and heart rate to Strava when authorized
         if: ${{ inputs.diagnose_garmin_sets != true }}
